@@ -1,0 +1,223 @@
+package finder
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"unicode"
+
+	gh "github.com/T4LLY/xfdig/internal/github"
+)
+
+type GitHub interface {
+	SearchClosedIssues(ctx context.Context, query string, limit int) ([]gh.Issue, string, error)
+	ClosingPullRequests(ctx context.Context, issue gh.Issue) ([]gh.PullRequest, error)
+}
+
+type Finder struct {
+	github GitHub
+}
+
+func New(github GitHub) *Finder {
+	return &Finder{github: github}
+}
+
+type Evidence struct {
+	IssueRank    int      `json:"issue_rank"`
+	IssueClosed  bool     `json:"issue_closed"`
+	PRLinked     bool     `json:"pr_linked"`
+	PRMerged     bool     `json:"pr_merged"`
+	MatchedTerms []string `json:"matched_terms,omitempty"`
+}
+
+type IssueRef struct {
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
+	URL    string `json:"url"`
+}
+
+type Fix struct {
+	Repo     string   `json:"repo"`
+	PR       int      `json:"pr"`
+	URL      string   `json:"url"`
+	Title    string   `json:"title"`
+	MergedAt string   `json:"merged_at"`
+	Issue    IssueRef `json:"issue"`
+	Evidence Evidence `json:"evidence"`
+}
+
+type Result struct {
+	Query      string   `json:"q"`
+	SearchType string   `json:"search_type"`
+	Fixes      []Fix    `json:"fixes"`
+	Warnings   []string `json:"warnings,omitempty"`
+}
+
+func (f *Finder) Find(ctx context.Context, query string, limit int) (Result, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return Result{}, fmt.Errorf("query is empty")
+	}
+	if limit < 1 {
+		return Result{}, fmt.Errorf("limit must be at least 1")
+	}
+
+	issueLimit := limit * 4
+	if issueLimit < 12 {
+		issueLimit = 12
+	}
+	if issueLimit > 50 {
+		issueLimit = 50
+	}
+
+	issues, mode, err := f.github.SearchClosedIssues(ctx, query, issueLimit)
+	if err != nil {
+		return Result{}, err
+	}
+
+	type found struct {
+		fix Fix
+	}
+	foundCh := make(chan found, len(issues)*2)
+	warnCh := make(chan string, len(issues))
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+
+	for _, issue := range issues {
+		issue := issue
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+
+			prs, err := f.github.ClosingPullRequests(ctx, issue)
+			if err != nil {
+				warnCh <- fmt.Sprintf("%s#%d: %v", issue.Repo, issue.Number, err)
+				return
+			}
+			for _, pr := range prs {
+				if pr.MergedAt == "" {
+					continue
+				}
+				text := issue.Title + " " + issue.Body + " " + pr.Title
+				foundCh <- found{fix: Fix{
+					Repo:     pr.Repo,
+					PR:       pr.Number,
+					URL:      pr.URL,
+					Title:    pr.Title,
+					MergedAt: pr.MergedAt,
+					Issue: IssueRef{
+						Repo:   issue.Repo,
+						Number: issue.Number,
+						URL:    issue.URL,
+					},
+					Evidence: Evidence{
+						IssueRank:    issue.Rank,
+						IssueClosed:  issue.Closed,
+						PRLinked:     true,
+						PRMerged:     true,
+						MatchedTerms: matchedTerms(query, text),
+					},
+				}}
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(foundCh)
+	close(warnCh)
+
+	fixes := make([]Fix, 0, limit)
+	for item := range foundCh {
+		fixes = append(fixes, item.fix)
+	}
+	warnings := make([]string, 0)
+	for warning := range warnCh {
+		warnings = append(warnings, warning)
+	}
+
+	sort.SliceStable(fixes, func(i, j int) bool {
+		if fixes[i].Evidence.IssueRank != fixes[j].Evidence.IssueRank {
+			return fixes[i].Evidence.IssueRank < fixes[j].Evidence.IssueRank
+		}
+		if len(fixes[i].Evidence.MatchedTerms) != len(fixes[j].Evidence.MatchedTerms) {
+			return len(fixes[i].Evidence.MatchedTerms) > len(fixes[j].Evidence.MatchedTerms)
+		}
+		return fixes[i].URL < fixes[j].URL
+	})
+
+	fixes = dedupe(fixes)
+	if len(fixes) > limit {
+		fixes = fixes[:limit]
+	}
+	sort.Strings(warnings)
+
+	return Result{
+		Query:      query,
+		SearchType: mode,
+		Fixes:      fixes,
+		Warnings:   warnings,
+	}, nil
+}
+
+func dedupe(fixes []Fix) []Fix {
+	seen := make(map[string]struct{}, len(fixes))
+	out := make([]Fix, 0, len(fixes))
+	for _, fix := range fixes {
+		key := fix.URL
+		if key == "" {
+			key = fmt.Sprintf("%s#%d", fix.Repo, fix.PR)
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, fix)
+	}
+	return out
+}
+
+func matchedTerms(query, text string) []string {
+	text = strings.ToLower(text)
+	seen := map[string]struct{}{}
+	var terms []string
+	for _, term := range tokenize(query) {
+		if len([]rune(term)) < 3 || isStopword(term) {
+			continue
+		}
+		if strings.Contains(text, strings.ToLower(term)) {
+			lower := strings.ToLower(term)
+			if _, ok := seen[lower]; ok {
+				continue
+			}
+			seen[lower] = struct{}{}
+			terms = append(terms, lower)
+		}
+	}
+	if len(terms) > 8 {
+		terms = terms[:8]
+	}
+	return terms
+}
+
+func tokenize(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool {
+		return !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == ':' || r == '.')
+	})
+}
+
+func isStopword(s string) bool {
+	switch strings.ToLower(s) {
+	case "the", "and", "for", "with", "from", "when", "then", "that", "this", "into", "while", "does", "not", "are", "was", "were", "but", "can", "could", "should", "would", "has", "have", "had", "after", "before":
+		return true
+	default:
+		return false
+	}
+}
