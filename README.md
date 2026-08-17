@@ -144,7 +144,7 @@ After publishing the repository, it can be installed with the Skills CLI convent
 npx skills add T4LLY/xfdig --skill xfdig -g -y
 ```
 
-## Scope of v0.1
+## Scope of v0.2
 
 Included:
 
