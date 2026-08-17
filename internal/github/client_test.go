@@ -19,14 +19,20 @@ func (f *fakeRunner) Run(_ context.Context, args ...string) ([]byte, error) {
 	return f.responses[i], f.errors[i]
 }
 
-func TestSearchClosedIssuesHybrid(t *testing.T) {
+func TestSearchClosedIssuesHybridWithFilters(t *testing.T) {
 	runner := &fakeRunner{
-		responses: [][]byte{[]byte(`{"items":[{"number":7,"title":"pipe deadlock","html_url":"https://github.com/acme/tool/issues/7","state":"closed","body":"stderr fills","repository_url":"https://api.github.com/repos/acme/tool"}]}`)},
+		responses: [][]byte{[]byte(`{"search_type":"hybrid","items":[{"number":7,"title":"pipe deadlock","html_url":"https://github.com/acme/tool/issues/7","state":"closed","body":"stderr fills","repository_url":"https://api.github.com/repos/acme/tool"}]}`)},
 		errors:    []error{nil},
 	}
 	client := NewClient(runner)
 
-	issues, mode, err := client.SearchClosedIssues(context.Background(), "stderr deadlock", 5)
+	issues, mode, err := client.SearchClosedIssues(context.Background(), SearchOptions{
+		Query:    "stderr deadlock",
+		Language: "go",
+		Since:    "2025-01-01",
+		Until:    "2026-01-01",
+		Limit:    5,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,8 +43,40 @@ func TestSearchClosedIssuesHybrid(t *testing.T) {
 		t.Fatalf("unexpected issues: %#v", issues)
 	}
 	joined := strings.Join(runner.calls[0], " ")
-	if !strings.Contains(joined, "search_type=hybrid") || !strings.Contains(joined, "is:issue is:closed") {
-		t.Fatalf("unexpected args: %s", joined)
+	for _, want := range []string{
+		"search_type=hybrid",
+		"is:issue is:closed",
+		"language:go",
+		"closed:>=2025-01-01",
+		"closed:<=2026-01-01",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("args missing %q: %s", want, joined)
+		}
+	}
+}
+
+func TestSearchClosedIssuesAnyLanguageOmitsLanguageQualifier(t *testing.T) {
+	runner := &fakeRunner{
+		responses: [][]byte{[]byte(`{"items":[]}`)},
+		errors:    []error{nil},
+	}
+	client := NewClient(runner)
+
+	_, _, err := client.SearchClosedIssues(context.Background(), SearchOptions{Query: "bug", Language: "any", Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(runner.calls[0], " ")
+	if strings.Contains(joined, "language:") {
+		t.Fatalf("unexpected language qualifier: %s", joined)
+	}
+}
+
+func TestSearchClosedIssuesQuotesLanguageWithSpaces(t *testing.T) {
+	q := buildIssueQuery(SearchOptions{Query: "bug", Language: "Visual Basic"})
+	if !strings.Contains(q, `language:"Visual Basic"`) {
+		t.Fatalf("query=%q", q)
 	}
 }
 
@@ -49,7 +87,7 @@ func TestSearchClosedIssuesFallsBackToLexical(t *testing.T) {
 	}
 	client := NewClient(runner)
 
-	_, mode, err := client.SearchClosedIssues(context.Background(), "bug", 5)
+	_, mode, err := client.SearchClosedIssues(context.Background(), SearchOptions{Query: "bug", Language: "rust", Limit: 5})
 	if err != nil {
 		t.Fatal(err)
 	}

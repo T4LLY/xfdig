@@ -1,2 +1,5 @@
 /xfdig
 *.exe
+.patch-applied
+.patch-inbox
+.patch-failed

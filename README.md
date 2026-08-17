@@ -2,10 +2,10 @@
 
 `xfdig` finds real merged fixes in GitHub history.
 
-Give it a bug, error, or symptom. It searches similar closed GitHub issues, follows GitHub's issue-to-PR relationship, keeps merged pull requests, and emits compact evidence that another CLI or AI agent can inspect further.
+Give it a programming language plus a bug, error, or symptom. It searches similar closed GitHub issues, follows GitHub's issue-to-PR relationship, keeps merged pull requests, and emits compact evidence that another CLI or AI agent can inspect further.
 
 ```text
-problem
+language + problem
   -> similar closed issues
   -> linked pull requests
   -> merged fixes
@@ -34,16 +34,49 @@ go install github.com/T4LLY/xfdig/cmd/xfdig@latest
 ## Usage
 
 ```bash
-xfdig "IPC::Open3 hangs when stderr is not drained"
-xfdig -n 8 "socket reconnect race"
-xfdig -t "CustomRenderTexture does not update"
+xfdig perl "IPC::Open3 hangs when stderr is not drained"
+xfdig go --since 1y "socket reconnect race"
+xfdig rust --since 2y --until 6m -n 8 "shutdown hangs"
+xfdig csharp -t "CustomRenderTexture does not update"
+xfdig any "HTTP proxy connection reset"
 ```
+
+```text
+Usage: xfdig <language|any> [options] <bug, error, or symptom>
+
+Options:
+  -s, --since <time>  search issues closed since this time
+  -u, --until <time>  search issues closed until this time
+  -n <N>              maximum number of fixes (1-20, default 5)
+  -t                  human-readable output
+```
+
+`--since` and `--until` accept either an absolute date or a relative time:
+
+```text
+14d         14 days ago
+6m          6 calendar months ago
+2y          2 calendar years ago
+2025-04-01  exact date
+```
+
+For example, if today is 2026-08-17:
+
+```bash
+xfdig go --since 2y --until 6m "deadlock"
+```
+
+searches issues closed from 2024-08-17 through 2026-02-17. Omitting both bounds searches all available history.
+
+The language is a GitHub repository-language filter. Use `any` only when the problem is meaningfully language-independent.
 
 Default output is compact JSON:
 
 ```json
 {
   "q": "stderr pipe deadlock",
+  "language": "go",
+  "since": "2025-08-17",
   "search_type": "hybrid",
   "fixes": [
     {
@@ -69,7 +102,7 @@ Default output is compact JSON:
 }
 ```
 
-`issue_rank` is the position returned by GitHub issue search. `matched_terms` is a simple lexical overlap used only as additional evidence; it is not an LLM-generated explanation or a confidence score.
+`issue_rank` is the position returned by GitHub issue search; lower is better. `matched_terms` is a simple lexical overlap used only as additional evidence. It is not an LLM-generated explanation or a confidence score.
 
 ## CLI chaining
 
@@ -78,7 +111,7 @@ Default output is compact JSON:
 ### jq + GitHub CLI
 
 ```bash
-pr=$(xfdig "stderr pipe deadlock" | jq -r '.fixes[0].url')
+pr=$(xfdig go --since 2y "stderr pipe deadlock" | jq -r '.fixes[0].url')
 gh pr view "$pr"
 gh pr diff "$pr"
 ```
@@ -86,14 +119,18 @@ gh pr diff "$pr"
 ### PowerShell
 
 ```powershell
-$pr = (xfdig "stderr pipe deadlock" | ConvertFrom-Json).fixes[0].url
+$pr = (xfdig go --since 2y "stderr pipe deadlock" | ConvertFrom-Json).fixes[0].url
 gh pr view $pr
 gh pr diff $pr
 ```
 
+The JSON also keeps `merged_at`, `repo`, `issue`, and `pr` so tools such as `jq` can perform additional filtering or formatting without making `xfdig` itself grow more search options.
+
 ## Search behavior
 
-`xfdig` requests GitHub hybrid issue search through `gh api`. If the current GitHub API surface does not accept `search_type=hybrid`, it falls back to ordinary lexical issue search and reports `"search_type":"lexical_fallback"`.
+`xfdig` requests GitHub hybrid issue search through `gh api`. The search query always requires closed issues, applies the requested repository language unless it is `any`, and applies `closed:` date bounds when `--since` or `--until` is present.
+
+If the current GitHub API surface does not accept `search_type=hybrid`, `xfdig` falls back to ordinary lexical issue search and reports `"search_type":"lexical_fallback"`.
 
 For each closed issue candidate, `xfdig` asks GitHub GraphQL for `closedByPullRequestsReferences(includeClosedPrs: true)` and keeps only PRs with a merge timestamp. This avoids guessing issue/PR relationships from text.
 
@@ -111,7 +148,9 @@ npx skills add T4LLY/xfdig --skill xfdig -g -y
 
 Included:
 
+- programming-language filter or `any`
 - natural-language/error query
+- optional `--since` / `--until` closed-date bounds
 - cross-repository closed issue search
 - direct issue -> PR relationship lookup
 - merged PR filtering

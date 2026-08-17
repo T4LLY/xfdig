@@ -16,7 +16,18 @@ func JSON(w io.Writer, result finder.Result) error {
 }
 
 func Text(w io.Writer, result finder.Result) error {
-	fmt.Fprintf(w, "query: %s\nsearch: %s\n", result.Query, result.SearchType)
+	fmt.Fprintf(w, "query: %s\nlanguage: %s\nsearch: %s\n", result.Query, result.Language, result.SearchType)
+	if result.Since != "" || result.Until != "" {
+		since := result.Since
+		until := result.Until
+		if since == "" {
+			since = "*"
+		}
+		if until == "" {
+			until = "*"
+		}
+		fmt.Fprintf(w, "closed: %s .. %s\n", since, until)
+	}
 	if len(result.Fixes) == 0 {
 		fmt.Fprintln(w, "no merged linked fixes found")
 	}

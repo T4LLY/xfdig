@@ -12,7 +12,7 @@ import (
 )
 
 type GitHub interface {
-	SearchClosedIssues(ctx context.Context, query string, limit int) ([]gh.Issue, string, error)
+	SearchClosedIssues(ctx context.Context, options gh.SearchOptions) ([]gh.Issue, string, error)
 	ClosingPullRequests(ctx context.Context, issue gh.Issue) ([]gh.PullRequest, error)
 }
 
@@ -22,6 +22,13 @@ type Finder struct {
 
 func New(github GitHub) *Finder {
 	return &Finder{github: github}
+}
+
+type Options struct {
+	Language string
+	Since    string
+	Until    string
+	Limit    int
 }
 
 type Evidence struct {
@@ -50,21 +57,28 @@ type Fix struct {
 
 type Result struct {
 	Query      string   `json:"q"`
+	Language   string   `json:"language"`
+	Since      string   `json:"since,omitempty"`
+	Until      string   `json:"until,omitempty"`
 	SearchType string   `json:"search_type"`
 	Fixes      []Fix    `json:"fixes"`
 	Warnings   []string `json:"warnings,omitempty"`
 }
 
-func (f *Finder) Find(ctx context.Context, query string, limit int) (Result, error) {
+func (f *Finder) Find(ctx context.Context, query string, options Options) (Result, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return Result{}, fmt.Errorf("query is empty")
 	}
-	if limit < 1 {
+	language := strings.TrimSpace(options.Language)
+	if language == "" {
+		return Result{}, fmt.Errorf("language is empty")
+	}
+	if options.Limit < 1 {
 		return Result{}, fmt.Errorf("limit must be at least 1")
 	}
 
-	issueLimit := limit * 4
+	issueLimit := options.Limit * 4
 	if issueLimit < 12 {
 		issueLimit = 12
 	}
@@ -72,7 +86,13 @@ func (f *Finder) Find(ctx context.Context, query string, limit int) (Result, err
 		issueLimit = 50
 	}
 
-	issues, mode, err := f.github.SearchClosedIssues(ctx, query, issueLimit)
+	issues, mode, err := f.github.SearchClosedIssues(ctx, gh.SearchOptions{
+		Query:    query,
+		Language: language,
+		Since:    options.Since,
+		Until:    options.Until,
+		Limit:    issueLimit,
+	})
 	if err != nil {
 		return Result{}, err
 	}
@@ -134,7 +154,7 @@ func (f *Finder) Find(ctx context.Context, query string, limit int) (Result, err
 	close(foundCh)
 	close(warnCh)
 
-	fixes := make([]Fix, 0, limit)
+	fixes := make([]Fix, 0, options.Limit)
 	for item := range foundCh {
 		fixes = append(fixes, item.fix)
 	}
@@ -154,13 +174,16 @@ func (f *Finder) Find(ctx context.Context, query string, limit int) (Result, err
 	})
 
 	fixes = dedupe(fixes)
-	if len(fixes) > limit {
-		fixes = fixes[:limit]
+	if len(fixes) > options.Limit {
+		fixes = fixes[:options.Limit]
 	}
 	sort.Strings(warnings)
 
 	return Result{
 		Query:      query,
+		Language:   language,
+		Since:      options.Since,
+		Until:      options.Until,
 		SearchType: mode,
 		Fixes:      fixes,
 		Warnings:   warnings,

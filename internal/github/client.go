@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 const closingPRQuery = `query($owner:String!,$name:String!,$number:Int!){
@@ -57,6 +58,14 @@ type Client struct {
 
 func NewClient(r Runner) *Client {
 	return &Client{runner: r}
+}
+
+type SearchOptions struct {
+	Query    string
+	Language string
+	Since    string
+	Until    string
+	Limit    int
 }
 
 type Issue struct {
@@ -112,7 +121,8 @@ type graphqlResponse struct {
 	} `json:"data"`
 }
 
-func (c *Client) SearchClosedIssues(ctx context.Context, query string, limit int) ([]Issue, string, error) {
+func (c *Client) SearchClosedIssues(ctx context.Context, options SearchOptions) ([]Issue, string, error) {
+	limit := options.Limit
 	if limit < 1 {
 		limit = 1
 	}
@@ -120,7 +130,7 @@ func (c *Client) SearchClosedIssues(ctx context.Context, query string, limit int
 		limit = 100
 	}
 
-	q := strings.TrimSpace(query) + " is:issue is:closed"
+	q := buildIssueQuery(options)
 	args := []string{
 		"api", "--method", "GET", "search/issues",
 		"-f", "q=" + q,
@@ -169,6 +179,30 @@ func (c *Client) SearchClosedIssues(ctx context.Context, query string, limit int
 		})
 	}
 	return issues, mode, nil
+}
+
+func buildIssueQuery(options SearchOptions) string {
+	parts := []string{strings.TrimSpace(options.Query), "is:issue", "is:closed"}
+	language := strings.TrimSpace(options.Language)
+	if language != "" && !strings.EqualFold(language, "any") {
+		parts = append(parts, "language:"+quoteQualifier(language))
+	}
+	if options.Since != "" {
+		parts = append(parts, "closed:>="+options.Since)
+	}
+	if options.Until != "" {
+		parts = append(parts, "closed:<="+options.Until)
+	}
+	return strings.Join(parts, " ")
+}
+
+func quoteQualifier(value string) string {
+	if strings.IndexFunc(value, unicode.IsSpace) < 0 && !strings.ContainsRune(value, '"') {
+		return value
+	}
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `"`, `\"`)
+	return `"` + value + `"`
 }
 
 func (c *Client) ClosingPullRequests(ctx context.Context, issue Issue) ([]PullRequest, error) {
