@@ -22,7 +22,7 @@ Useful options:
 ```bash
 xfdig go --since 1y "<query>"                  # fixes from the last year
 xfdig rust --since 2y --until 6m "<query>"     # bounded historical window
-xfdig csharp -n 8 "<query>"                    # more candidates
+xfdig csharp -n 50 "<query>"                   # more candidates
 xfdig typescript -t "<query>"                  # human-readable output
 ```
 

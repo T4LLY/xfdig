@@ -16,7 +16,7 @@ import (
 	"github.com/T4LLY/xfdig/internal/output"
 )
 
-const version = "0.2.0"
+const version = "0.2.1"
 
 var (
 	errHelp      = errors.New("help requested")
@@ -92,7 +92,7 @@ Find merged GitHub PRs linked to similar closed issues.
 Options:
   -s, --since <time>  search issues closed since this time
   -u, --until <time>  search issues closed until this time
-  -n <N>              maximum number of fixes (1-20, default 5)
+  -n <N>              maximum number of fixes (1-100, default 20)
   -t                  human-readable output
       --version        print version
   -h, --help           show help
@@ -101,7 +101,7 @@ Time values accept Nd, Nm, Ny, or YYYY-MM-DD. Examples: 14d, 6m, 2y.`)
 }
 
 func parseCLI(args []string, now time.Time) (cliConfig, error) {
-	cfg := cliConfig{Limit: 5}
+	cfg := cliConfig{Limit: 20}
 	positionals := make([]string, 0, len(args))
 	endOptions := false
 
@@ -207,8 +207,8 @@ func optionValue(args []string, index int, option string) (string, int, error) {
 
 func parseLimit(raw string) (int, error) {
 	limit, err := strconv.Atoi(raw)
-	if err != nil || limit < 1 || limit > 20 {
-		return 0, fmt.Errorf("-n must be between 1 and 20")
+	if err != nil || limit < 1 || limit > 100 {
+		return 0, fmt.Errorf("-n must be between 1 and 100")
 	}
 	return limit, nil
 }

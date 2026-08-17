@@ -58,3 +58,26 @@ func TestParseCLIRequiresLanguageAndQuery(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestParseCLIDefaultLimitIsTwenty(t *testing.T) {
+	cfg, err := parseCLI([]string{"go", "deadlock"}, fixedNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Limit != 20 {
+		t.Fatalf("limit=%d", cfg.Limit)
+	}
+}
+
+func TestParseLimitAcceptsOneToOneHundred(t *testing.T) {
+	for _, raw := range []string{"1", "100"} {
+		if _, err := parseLimit(raw); err != nil {
+			t.Fatalf("parseLimit(%q): %v", raw, err)
+		}
+	}
+	for _, raw := range []string{"0", "101"} {
+		if _, err := parseLimit(raw); err == nil {
+			t.Fatalf("parseLimit(%q) unexpectedly succeeded", raw)
+		}
+	}
+}

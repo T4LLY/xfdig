@@ -47,7 +47,7 @@ Usage: xfdig <language|any> [options] <bug, error, or symptom>
 Options:
   -s, --since <time>  search issues closed since this time
   -u, --until <time>  search issues closed until this time
-  -n <N>              maximum number of fixes (1-20, default 5)
+  -n <N>              maximum number of fixes (1-100, default 20)
   -t                  human-readable output
 ```
 
