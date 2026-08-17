@@ -81,3 +81,20 @@ func TestParseLimitAcceptsOneToOneHundred(t *testing.T) {
 		}
 	}
 }
+
+func TestParseCLIAcceptsShortEqualsBounds(t *testing.T) {
+	cfg, err := parseCLI([]string{"go", "-s=14d", "-u=7d", "deadlock"}, fixedNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Since != "2026-08-03" || cfg.Until != "2026-08-10" {
+		t.Fatalf("unexpected bounds: %#v", cfg)
+	}
+}
+
+func TestParseCLIRejectsFlagWhereOptionValueIsRequired(t *testing.T) {
+	_, err := parseCLI([]string{"go", "-n", "-t", "deadlock"}, fixedNow())
+	if err == nil || err.Error() != "-n requires a value" {
+		t.Fatalf("err=%v", err)
+	}
+}

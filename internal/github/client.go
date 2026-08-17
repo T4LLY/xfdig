@@ -11,11 +11,11 @@ import (
 	"unicode"
 )
 
-const closingPRQuery = `query($owner:String!,$name:String!,$number:Int!){
+const closingPRQuery = `query($owner:String!,$name:String!,$number:Int!,$cursor:String){
   repository(owner:$owner,name:$name){
     issue(number:$number){
-      closed
-      closedByPullRequestsReferences(first:20,includeClosedPrs:true){
+      closedByPullRequestsReferences(first:100,after:$cursor,includeClosedPrs:true){
+        pageInfo{hasNextPage endCursor}
         nodes{
           number
           title
@@ -103,8 +103,11 @@ type graphqlResponse struct {
 	Data struct {
 		Repository *struct {
 			Issue *struct {
-				Closed                         bool `json:"closed"`
 				ClosedByPullRequestsReferences struct {
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
 					Nodes []struct {
 						Number     int     `json:"number"`
 						Title      string  `json:"title"`
@@ -211,43 +214,57 @@ func (c *Client) ClosingPullRequests(ctx context.Context, issue Issue) ([]PullRe
 		return nil, fmt.Errorf("invalid repository %q", issue.Repo)
 	}
 
-	args := []string{
-		"api", "graphql",
-		"-f", "query=" + closingPRQuery,
-		"-F", "owner=" + owner,
-		"-F", "name=" + name,
-		"-F", "number=" + strconv.Itoa(issue.Number),
-	}
-	out, err := c.runner.Run(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var response graphqlResponse
-	if err := json.Unmarshal(out, &response); err != nil {
-		return nil, fmt.Errorf("decode closing PR response: %w", err)
-	}
-	if response.Data.Repository == nil || response.Data.Repository.Issue == nil {
-		return nil, nil
-	}
-
-	nodes := response.Data.Repository.Issue.ClosedByPullRequestsReferences.Nodes
-	prs := make([]PullRequest, 0, len(nodes))
-	for _, node := range nodes {
-		mergedAt := ""
-		if node.MergedAt != nil {
-			mergedAt = *node.MergedAt
+	prs := make([]PullRequest, 0)
+	cursor := ""
+	for {
+		args := []string{
+			"api", "graphql",
+			"-f", "query=" + closingPRQuery,
+			"-f", "owner=" + owner,
+			"-f", "name=" + name,
+			"-F", "number=" + strconv.Itoa(issue.Number),
 		}
-		prs = append(prs, PullRequest{
-			Repo:     node.Repository.NameWithOwner,
-			Number:   node.Number,
-			Title:    node.Title,
-			URL:      node.URL,
-			State:    node.State,
-			MergedAt: mergedAt,
-		})
+		if cursor != "" {
+			args = append(args, "-f", "cursor="+cursor)
+		}
+
+		out, err := c.runner.Run(ctx, args...)
+		if err != nil {
+			return nil, err
+		}
+
+		var response graphqlResponse
+		if err := json.Unmarshal(out, &response); err != nil {
+			return nil, fmt.Errorf("decode closing PR response: %w", err)
+		}
+		if response.Data.Repository == nil || response.Data.Repository.Issue == nil {
+			return prs, nil
+		}
+
+		connection := response.Data.Repository.Issue.ClosedByPullRequestsReferences
+		for _, node := range connection.Nodes {
+			mergedAt := ""
+			if node.MergedAt != nil {
+				mergedAt = *node.MergedAt
+			}
+			prs = append(prs, PullRequest{
+				Repo:     node.Repository.NameWithOwner,
+				Number:   node.Number,
+				Title:    node.Title,
+				URL:      node.URL,
+				State:    node.State,
+				MergedAt: mergedAt,
+			})
+		}
+
+		if !connection.PageInfo.HasNextPage {
+			return prs, nil
+		}
+		if connection.PageInfo.EndCursor == "" || connection.PageInfo.EndCursor == cursor {
+			return nil, fmt.Errorf("closing PR pagination returned an invalid cursor")
+		}
+		cursor = connection.PageInfo.EndCursor
 	}
-	return prs, nil
 }
 
 func repoFromAPIURL(raw string) (string, bool) {

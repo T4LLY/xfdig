@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	gh "github.com/T4LLY/xfdig/internal/github"
@@ -77,6 +78,9 @@ func (f *Finder) Find(ctx context.Context, query string, options Options) (Resul
 	if options.Limit < 1 {
 		return Result{}, fmt.Errorf("limit must be at least 1")
 	}
+	if err := validateDateBounds(options.Since, options.Until); err != nil {
+		return Result{}, err
+	}
 
 	issueLimit := options.Limit * 4
 	if issueLimit < 12 {
@@ -97,13 +101,11 @@ func (f *Finder) Find(ctx context.Context, query string, options Options) (Resul
 		return Result{}, err
 	}
 
-	type found struct {
-		fix Fix
-	}
-	foundCh := make(chan found, len(issues)*2)
-	warnCh := make(chan string, len(issues))
+	fixes := make([]Fix, 0, options.Limit)
+	warnings := make([]string, 0)
 	sem := make(chan struct{}, 4)
 	var wg sync.WaitGroup
+	var mu sync.Mutex
 
 	for _, issue := range issues {
 		issue := issue
@@ -119,15 +121,19 @@ func (f *Finder) Find(ctx context.Context, query string, options Options) (Resul
 
 			prs, err := f.github.ClosingPullRequests(ctx, issue)
 			if err != nil {
-				warnCh <- fmt.Sprintf("%s#%d: %v", issue.Repo, issue.Number, err)
+				mu.Lock()
+				warnings = append(warnings, fmt.Sprintf("%s#%d: %v", issue.Repo, issue.Number, err))
+				mu.Unlock()
 				return
 			}
+
+			local := make([]Fix, 0, len(prs))
 			for _, pr := range prs {
 				if pr.MergedAt == "" {
 					continue
 				}
 				text := issue.Title + " " + issue.Body + " " + pr.Title
-				foundCh <- found{fix: Fix{
+				local = append(local, Fix{
 					Repo:     pr.Repo,
 					PR:       pr.Number,
 					URL:      pr.URL,
@@ -145,22 +151,19 @@ func (f *Finder) Find(ctx context.Context, query string, options Options) (Resul
 						PRMerged:     true,
 						MatchedTerms: matchedTerms(query, text),
 					},
-				}}
+				})
+			}
+			if len(local) != 0 {
+				mu.Lock()
+				fixes = append(fixes, local...)
+				mu.Unlock()
 			}
 		}()
 	}
 
 	wg.Wait()
-	close(foundCh)
-	close(warnCh)
-
-	fixes := make([]Fix, 0, options.Limit)
-	for item := range foundCh {
-		fixes = append(fixes, item.fix)
-	}
-	warnings := make([]string, 0)
-	for warning := range warnCh {
-		warnings = append(warnings, warning)
+	if err := ctx.Err(); err != nil {
+		return Result{}, fmt.Errorf("find fixes: %w", err)
 	}
 
 	sort.SliceStable(fixes, func(i, j int) bool {
@@ -212,7 +215,7 @@ func matchedTerms(query, text string) []string {
 	seen := map[string]struct{}{}
 	var terms []string
 	for _, term := range tokenize(query) {
-		if len([]rune(term)) < 3 || isStopword(term) {
+		if !isUsefulTerm(term) || isStopword(term) {
 			continue
 		}
 		if strings.Contains(text, strings.ToLower(term)) {
@@ -243,4 +246,37 @@ func isStopword(s string) bool {
 	default:
 		return false
 	}
+}
+
+func validateDateBounds(since, until string) error {
+	if since != "" {
+		if _, err := time.Parse("2006-01-02", since); err != nil {
+			return fmt.Errorf("since must be YYYY-MM-DD")
+		}
+	}
+	if until != "" {
+		if _, err := time.Parse("2006-01-02", until); err != nil {
+			return fmt.Errorf("until must be YYYY-MM-DD")
+		}
+	}
+	if since != "" && until != "" && since > until {
+		return fmt.Errorf("since must not be later than until")
+	}
+	return nil
+}
+
+func isUsefulTerm(term string) bool {
+	runes := []rune(term)
+	if len(runes) >= 3 {
+		return true
+	}
+	if len(runes) < 2 {
+		return false
+	}
+	for _, r := range runes {
+		if r > unicode.MaxASCII {
+			return true
+		}
+	}
+	return false
 }

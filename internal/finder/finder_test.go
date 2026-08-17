@@ -2,7 +2,11 @@ package finder
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	gh "github.com/T4LLY/xfdig/internal/github"
 )
@@ -58,5 +62,101 @@ func TestFindReturnsOnlyMergedLinkedPRs(t *testing.T) {
 	}
 	if github.search.Limit != 20 {
 		t.Fatalf("search limit=%d", github.search.Limit)
+	}
+}
+
+type manyPRGitHub struct{}
+
+func (manyPRGitHub) SearchClosedIssues(_ context.Context, _ gh.SearchOptions) ([]gh.Issue, string, error) {
+	issues := make([]gh.Issue, 10)
+	for i := range issues {
+		issues[i] = gh.Issue{
+			Repo:   "acme/tool",
+			Number: i + 1,
+			Title:  "deadlock",
+			URL:    "https://github.com/acme/tool/issues/1",
+			Closed: true,
+			Rank:   i + 1,
+		}
+	}
+	return issues, "hybrid", nil
+}
+
+func (manyPRGitHub) ClosingPullRequests(_ context.Context, issue gh.Issue) ([]gh.PullRequest, error) {
+	prs := make([]gh.PullRequest, 3)
+	for i := range prs {
+		number := issue.Number*10 + i
+		prs[i] = gh.PullRequest{
+			Repo:     "acme/tool",
+			Number:   number,
+			Title:    "fix deadlock",
+			URL:      "https://github.com/acme/tool/pull/" + fmt.Sprint(number),
+			State:    "MERGED",
+			MergedAt: "2026-08-01T00:00:00Z",
+		}
+	}
+	return prs, nil
+}
+
+func TestFindDoesNotDeadlockWhenMatchesExceedIssueBuffer(t *testing.T) {
+	done := make(chan error, 1)
+	go func() {
+		result, err := New(manyPRGitHub{}).Find(context.Background(), "deadlock", Options{Language: "go", Limit: 100})
+		if err == nil && len(result.Fixes) != 30 {
+			err = fmt.Errorf("fixes=%d, want 30", len(result.Fixes))
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Find deadlocked while collecting merged PRs")
+	}
+}
+
+type cancelGitHub struct{}
+
+func (cancelGitHub) SearchClosedIssues(_ context.Context, _ gh.SearchOptions) ([]gh.Issue, string, error) {
+	issues := make([]gh.Issue, 8)
+	for i := range issues {
+		issues[i] = gh.Issue{Repo: "acme/tool", Number: i + 1, Rank: i + 1}
+	}
+	return issues, "hybrid", nil
+}
+
+func (cancelGitHub) ClosingPullRequests(ctx context.Context, _ gh.Issue) ([]gh.PullRequest, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestFindReturnsContextDeadlineError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	_, err := New(cancelGitHub{}).Find(ctx, "deadlock", Options{Language: "go", Limit: 5})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err=%v, want context deadline exceeded", err)
+	}
+}
+
+func TestFindRejectsInvalidLibraryDateBounds(t *testing.T) {
+	_, err := New(&fakeGitHub{}).Find(context.Background(), "deadlock", Options{
+		Language: "go",
+		Since:    "2026-01-01 is:open",
+		Limit:    5,
+	})
+	if err == nil || !strings.Contains(err.Error(), "since must be YYYY-MM-DD") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestMatchedTermsKeepsTwoRuneNonASCIITerms(t *testing.T) {
+	terms := matchedTerms("排他", "排他制御の不具合を修正")
+	if len(terms) != 1 || terms[0] != "排他" {
+		t.Fatalf("terms=%#v", terms)
 	}
 }

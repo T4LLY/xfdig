@@ -16,7 +16,7 @@ import (
 	"github.com/T4LLY/xfdig/internal/output"
 )
 
-const version = "0.2.1"
+const version = "0.2.2"
 
 var (
 	errHelp      = errors.New("help requested")
@@ -131,11 +131,12 @@ func parseCLI(args []string, now time.Time) (cliConfig, error) {
 			if err != nil {
 				return cliConfig{}, fmt.Errorf("%s: %w", arg, err)
 			}
-		case strings.HasPrefix(arg, "--since="):
+		case strings.HasPrefix(arg, "-s=") || strings.HasPrefix(arg, "--since="):
+			option, value, _ := strings.Cut(arg, "=")
 			var err error
-			cfg.Since, err = resolveTime(strings.TrimPrefix(arg, "--since="), now)
+			cfg.Since, err = resolveTime(value, now)
 			if err != nil {
-				return cliConfig{}, fmt.Errorf("--since: %w", err)
+				return cliConfig{}, fmt.Errorf("%s: %w", option, err)
 			}
 		case arg == "-u" || arg == "--until":
 			value, next, err := optionValue(args, i, arg)
@@ -147,11 +148,12 @@ func parseCLI(args []string, now time.Time) (cliConfig, error) {
 			if err != nil {
 				return cliConfig{}, fmt.Errorf("%s: %w", arg, err)
 			}
-		case strings.HasPrefix(arg, "--until="):
+		case strings.HasPrefix(arg, "-u=") || strings.HasPrefix(arg, "--until="):
+			option, value, _ := strings.Cut(arg, "=")
 			var err error
-			cfg.Until, err = resolveTime(strings.TrimPrefix(arg, "--until="), now)
+			cfg.Until, err = resolveTime(value, now)
 			if err != nil {
-				return cliConfig{}, fmt.Errorf("--until: %w", err)
+				return cliConfig{}, fmt.Errorf("%s: %w", option, err)
 			}
 		case arg == "-n":
 			value, next, err := optionValue(args, i, arg)
@@ -199,7 +201,7 @@ func parseCLI(args []string, now time.Time) (cliConfig, error) {
 }
 
 func optionValue(args []string, index int, option string) (string, int, error) {
-	if index+1 >= len(args) {
+	if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") {
 		return "", index, fmt.Errorf("%s requires a value", option)
 	}
 	return args[index+1], index + 1, nil

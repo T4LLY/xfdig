@@ -114,3 +114,68 @@ func TestClosingPullRequests(t *testing.T) {
 		t.Fatalf("unexpected prs: %#v", prs)
 	}
 }
+
+func TestClosingPullRequestsUsesRawFieldsForStringVariables(t *testing.T) {
+	runner := &fakeRunner{
+		responses: [][]byte{[]byte(`{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[]}}}}}`)},
+		errors:    []error{nil},
+	}
+	client := NewClient(runner)
+
+	_, err := client.ClosingPullRequests(context.Background(), Issue{Repo: "123/2024", Number: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := runner.calls[0]
+	for _, want := range []string{"owner=123", "name=2024"} {
+		found := false
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == "-f" && args[i+1] == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing raw string field %q in %#v", want, args)
+		}
+	}
+}
+
+func TestClosingPullRequestsPaginatesAllResults(t *testing.T) {
+	runner := &fakeRunner{
+		responses: [][]byte{
+			[]byte(`{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":true,"endCursor":"CURSOR1"},"nodes":[{"number":11,"title":"first","url":"https://github.com/acme/tool/pull/11","state":"MERGED","mergedAt":"2026-08-01T00:00:00Z","repository":{"nameWithOwner":"acme/tool"}}]}}}}}`),
+			[]byte(`{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":"CURSOR2"},"nodes":[{"number":12,"title":"second","url":"https://github.com/acme/tool/pull/12","state":"MERGED","mergedAt":"2026-08-02T00:00:00Z","repository":{"nameWithOwner":"acme/tool"}}]}}}}}`),
+		},
+		errors: []error{nil, nil},
+	}
+	client := NewClient(runner)
+
+	prs, err := client.ClosingPullRequests(context.Background(), Issue{Repo: "acme/tool", Number: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prs) != 2 || prs[0].Number != 11 || prs[1].Number != 12 {
+		t.Fatalf("unexpected prs: %#v", prs)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("calls=%d", len(runner.calls))
+	}
+	joined := strings.Join(runner.calls[1], " ")
+	if !strings.Contains(joined, "cursor=CURSOR1") {
+		t.Fatalf("second call missing cursor: %s", joined)
+	}
+}
+
+func TestClosingPullRequestsRejectsInvalidPaginationCursor(t *testing.T) {
+	runner := &fakeRunner{
+		responses: [][]byte{[]byte(`{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":true,"endCursor":""},"nodes":[]}}}}}`)},
+		errors:    []error{nil},
+	}
+	client := NewClient(runner)
+
+	_, err := client.ClosingPullRequests(context.Background(), Issue{Repo: "acme/tool", Number: 7})
+	if err == nil || !strings.Contains(err.Error(), "invalid cursor") {
+		t.Fatalf("err=%v", err)
+	}
+}
