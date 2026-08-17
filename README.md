@@ -34,7 +34,6 @@ go install github.com/T4LLY/xfdig/cmd/xfdig@latest
 ## Usage
 
 ```bash
-xfdig perl "IPC::Open3 hangs when stderr is not drained"
 xfdig go --since 1y "socket reconnect race"
 xfdig rust --since 2y --until 6m -n 8 "shutdown hangs"
 xfdig csharp -t "CustomRenderTexture does not update"
