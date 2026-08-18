@@ -13,7 +13,7 @@ import (
 )
 
 type GitHub interface {
-	SearchClosedIssues(ctx context.Context, options gh.SearchOptions) ([]gh.Issue, string, error)
+	SearchClosedIssues(ctx context.Context, options gh.SearchOptions) ([]gh.Issue, gh.SearchInfo, error)
 	ClosingPullRequests(ctx context.Context, issue gh.Issue) ([]gh.PullRequest, error)
 }
 
@@ -103,11 +103,11 @@ func (f *Finder) Find(ctx context.Context, query string, options Options) (Resul
 	if issueLimit < 12 {
 		issueLimit = 12
 	}
-	if issueLimit > 50 {
-		issueLimit = 50
+	if issueLimit > 100 {
+		issueLimit = 100
 	}
 
-	issues, mode, err := f.github.SearchClosedIssues(ctx, gh.SearchOptions{
+	issues, searchInfo, err := f.github.SearchClosedIssues(ctx, gh.SearchOptions{
 		Query:    query,
 		Language: language,
 		Since:    options.Since,
@@ -119,10 +119,10 @@ func (f *Finder) Find(ctx context.Context, query string, options Options) (Resul
 		result.Error = err.Error()
 		return result, err
 	}
-	result.SearchType = mode
+	result.SearchType = searchInfo.Type
 
 	fixes := make([]Fix, 0, options.Limit)
-	warnings := make([]string, 0)
+	warnings := append([]string(nil), searchInfo.Warnings...)
 	sem := make(chan struct{}, 4)
 	var wg sync.WaitGroup
 	var mu sync.Mutex

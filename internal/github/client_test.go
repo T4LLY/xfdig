@@ -26,7 +26,7 @@ func TestSearchClosedIssuesHybridWithFilters(t *testing.T) {
 	}
 	client := NewClient(runner)
 
-	issues, mode, err := client.SearchClosedIssues(context.Background(), SearchOptions{
+	issues, info, err := client.SearchClosedIssues(context.Background(), SearchOptions{
 		Query:    "stderr deadlock",
 		Language: "go",
 		Since:    "2025-01-01",
@@ -36,8 +36,11 @@ func TestSearchClosedIssuesHybridWithFilters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mode != "hybrid" {
-		t.Fatalf("mode=%q", mode)
+	if info.Type != "hybrid" {
+		t.Fatalf("mode=%q", info.Type)
+	}
+	if len(info.Warnings) != 0 {
+		t.Fatalf("warnings=%#v", info.Warnings)
 	}
 	if len(issues) != 1 || issues[0].Repo != "acme/tool" || issues[0].Rank != 1 {
 		t.Fatalf("unexpected issues: %#v", issues)
@@ -87,15 +90,56 @@ func TestSearchClosedIssuesFallsBackToLexical(t *testing.T) {
 	}
 	client := NewClient(runner)
 
-	_, mode, err := client.SearchClosedIssues(context.Background(), SearchOptions{Query: "bug", Language: "rust", Limit: 5})
+	_, info, err := client.SearchClosedIssues(context.Background(), SearchOptions{Query: "bug", Language: "rust", Limit: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mode != "lexical_fallback" {
-		t.Fatalf("mode=%q", mode)
+	if info.Type != "lexical_fallback" {
+		t.Fatalf("mode=%q", info.Type)
+	}
+	if len(info.Warnings) != 1 || !strings.Contains(info.Warnings[0], "used lexical fallback") {
+		t.Fatalf("warnings=%#v", info.Warnings)
 	}
 	if len(runner.calls) != 2 {
 		t.Fatalf("calls=%d", len(runner.calls))
+	}
+}
+
+func TestSearchClosedIssuesWarnsWhenGitHubPerformsLexicalSearch(t *testing.T) {
+	runner := &fakeRunner{
+		responses: [][]byte{[]byte(`{"search_type":"lexical","items":[]}`)},
+		errors:    []error{nil},
+	}
+	client := NewClient(runner)
+
+	_, info, err := client.SearchClosedIssues(context.Background(), SearchOptions{Query: "bug", Language: "go", Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Type != "lexical" {
+		t.Fatalf("mode=%q", info.Type)
+	}
+	if len(info.Warnings) != 1 || !strings.Contains(info.Warnings[0], "instead of requested hybrid") {
+		t.Fatalf("warnings=%#v", info.Warnings)
+	}
+}
+
+func TestSearchClosedIssuesReportsIncompleteResults(t *testing.T) {
+	runner := &fakeRunner{
+		responses: [][]byte{[]byte(`{"search_type":"hybrid","incomplete_results":true,"items":[]}`)},
+		errors:    []error{nil},
+	}
+	client := NewClient(runner)
+
+	_, info, err := client.SearchClosedIssues(context.Background(), SearchOptions{Query: "bug", Language: "go", Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Type != "hybrid" {
+		t.Fatalf("mode=%q", info.Type)
+	}
+	if len(info.Warnings) != 1 || !strings.Contains(info.Warnings[0], "incomplete results") {
+		t.Fatalf("warnings=%#v", info.Warnings)
 	}
 }
 

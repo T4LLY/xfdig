@@ -68,6 +68,11 @@ type SearchOptions struct {
 	Limit    int
 }
 
+type SearchInfo struct {
+	Type     string
+	Warnings []string
+}
+
 type Issue struct {
 	Repo   string
 	Number int
@@ -88,8 +93,9 @@ type PullRequest struct {
 }
 
 type searchResponse struct {
-	SearchType string `json:"search_type"`
-	Items      []struct {
+	SearchType        string `json:"search_type"`
+	IncompleteResults bool   `json:"incomplete_results"`
+	Items             []struct {
 		Number        int    `json:"number"`
 		Title         string `json:"title"`
 		HTMLURL       string `json:"html_url"`
@@ -124,7 +130,7 @@ type graphqlResponse struct {
 	} `json:"data"`
 }
 
-func (c *Client) SearchClosedIssues(ctx context.Context, options SearchOptions) ([]Issue, string, error) {
+func (c *Client) SearchClosedIssues(ctx context.Context, options SearchOptions) ([]Issue, SearchInfo, error) {
 	limit := options.Limit
 	if limit < 1 {
 		limit = 1
@@ -141,8 +147,9 @@ func (c *Client) SearchClosedIssues(ctx context.Context, options SearchOptions) 
 		"-F", "per_page=" + strconv.Itoa(limit),
 	}
 	out, err := c.runner.Run(ctx, args...)
-	mode := "hybrid"
+	info := SearchInfo{Type: "hybrid"}
 	if err != nil {
+		hybridErr := err
 		// GitHub Enterprise Server or older API surfaces may not accept
 		// search_type. Fall back to ordinary lexical issue search.
 		fallback := []string{
@@ -151,18 +158,25 @@ func (c *Client) SearchClosedIssues(ctx context.Context, options SearchOptions) 
 			"-F", "per_page=" + strconv.Itoa(limit),
 		}
 		out, err = c.runner.Run(ctx, fallback...)
-		mode = "lexical_fallback"
+		info.Type = "lexical_fallback"
 		if err != nil {
-			return nil, "", err
+			return nil, SearchInfo{}, err
 		}
+		info.Warnings = append(info.Warnings, fmt.Sprintf("hybrid issue search failed; used lexical fallback: %v", hybridErr))
 	}
 
 	var response searchResponse
 	if err := json.Unmarshal(out, &response); err != nil {
-		return nil, "", fmt.Errorf("decode issue search response: %w", err)
+		return nil, SearchInfo{}, fmt.Errorf("decode issue search response: %w", err)
 	}
-	if response.SearchType != "" {
-		mode = response.SearchType
+	if response.SearchType != "" && info.Type != "lexical_fallback" {
+		info.Type = response.SearchType
+		if !strings.EqualFold(response.SearchType, "hybrid") {
+			info.Warnings = append(info.Warnings, fmt.Sprintf("GitHub performed %s issue search instead of requested hybrid search", response.SearchType))
+		}
+	}
+	if response.IncompleteResults {
+		info.Warnings = append(info.Warnings, "GitHub issue search returned incomplete results")
 	}
 
 	issues := make([]Issue, 0, len(response.Items))
@@ -181,7 +195,7 @@ func (c *Client) SearchClosedIssues(ctx context.Context, options SearchOptions) 
 			Rank:   i + 1,
 		})
 	}
-	return issues, mode, nil
+	return issues, info, nil
 }
 
 func buildIssueQuery(options SearchOptions) string {

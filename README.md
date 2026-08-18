@@ -104,7 +104,7 @@ Default output is compact JSON:
 
 `issue_rank` is the position returned by GitHub issue search; lower is better. `matched_terms` is a simple lexical overlap used only as additional evidence. It is not an LLM-generated explanation or a confidence score.
 
-`status` is `success` when discovery completed normally, `warning` when one or more linked-PR lookups failed but the remaining results are usable, and `failure` when discovery could not be completed reliably. Failure responses include an `error` field and exit with a non-zero status; detailed per-issue lookup failures remain in `warnings`.
+`status` is `success` when discovery completed normally, `warning` when search fell back to lexical mode, GitHub reported incomplete search results, or one or more linked-PR lookups failed but the remaining results are usable, and `failure` when discovery could not be completed reliably. Failure responses include an `error` field and exit with a non-zero status; detailed per-issue lookup failures remain in `warnings`.
 
 ## CLI chaining
 
@@ -132,7 +132,7 @@ The JSON also keeps `merged_at`, `repo`, `issue`, and `pr` so tools such as `jq`
 
 `xfdig` requests GitHub hybrid issue search through `gh api`. The search query always requires closed issues, applies the requested repository language unless it is `any`, and applies `closed:` date bounds when `--since` or `--until` is present.
 
-If the current GitHub API surface does not accept `search_type=hybrid`, `xfdig` falls back to ordinary lexical issue search and reports `"search_type":"lexical_fallback"`.
+If the hybrid search request fails but ordinary issue search succeeds, `xfdig` falls back to lexical search, reports `"search_type":"lexical_fallback"`, and sets `status` to `warning`. GitHub search responses with `"incomplete_results":true` also produce `warning` so an empty result is not mistaken for a complete search.
 
 For each closed issue candidate, `xfdig` asks GitHub GraphQL for `closedByPullRequestsReferences(includeClosedPrs: true)` and keeps only PRs with a merge timestamp. This avoids guessing issue/PR relationships from text.
 
@@ -146,7 +146,7 @@ After publishing the repository, it can be installed with the Skills CLI convent
 npx skills add T4LLY/xfdig --skill xfdig -g -y
 ```
 
-## Scope of v0.2
+## Scope of v0.3
 
 Included:
 

@@ -16,7 +16,7 @@ import (
 	"github.com/T4LLY/xfdig/internal/output"
 )
 
-const version = "0.3.0"
+const version = "0.3.1"
 
 var (
 	errHelp      = errors.New("help requested")

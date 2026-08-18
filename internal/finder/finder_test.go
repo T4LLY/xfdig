@@ -15,12 +15,12 @@ type fakeGitHub struct {
 	search gh.SearchOptions
 }
 
-func (f *fakeGitHub) SearchClosedIssues(_ context.Context, options gh.SearchOptions) ([]gh.Issue, string, error) {
+func (f *fakeGitHub) SearchClosedIssues(_ context.Context, options gh.SearchOptions) ([]gh.Issue, gh.SearchInfo, error) {
 	f.search = options
 	return []gh.Issue{
 		{Repo: "acme/tool", Number: 7, Title: "stderr pipe deadlock", URL: "https://github.com/acme/tool/issues/7", Body: "child hangs when stderr fills", Closed: true, Rank: 1},
 		{Repo: "other/tool", Number: 3, Title: "unrelated", URL: "https://github.com/other/tool/issues/3", Closed: true, Rank: 2},
-	}, "hybrid", nil
+	}, gh.SearchInfo{Type: "hybrid"}, nil
 }
 
 func (f *fakeGitHub) ClosingPullRequests(_ context.Context, issue gh.Issue) ([]gh.PullRequest, error) {
@@ -68,9 +68,20 @@ func TestFindReturnsOnlyMergedLinkedPRs(t *testing.T) {
 	}
 }
 
+func TestFindCapsIssueSearchAt100(t *testing.T) {
+	github := &fakeGitHub{}
+	_, err := New(github).Find(context.Background(), "deadlock", Options{Language: "go", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if github.search.Limit != 100 {
+		t.Fatalf("search limit=%d, want 100", github.search.Limit)
+	}
+}
+
 type manyPRGitHub struct{}
 
-func (manyPRGitHub) SearchClosedIssues(_ context.Context, _ gh.SearchOptions) ([]gh.Issue, string, error) {
+func (manyPRGitHub) SearchClosedIssues(_ context.Context, _ gh.SearchOptions) ([]gh.Issue, gh.SearchInfo, error) {
 	issues := make([]gh.Issue, 10)
 	for i := range issues {
 		issues[i] = gh.Issue{
@@ -82,7 +93,7 @@ func (manyPRGitHub) SearchClosedIssues(_ context.Context, _ gh.SearchOptions) ([
 			Rank:   i + 1,
 		}
 	}
-	return issues, "hybrid", nil
+	return issues, gh.SearchInfo{Type: "hybrid"}, nil
 }
 
 func (manyPRGitHub) ClosingPullRequests(_ context.Context, issue gh.Issue) ([]gh.PullRequest, error) {
@@ -123,12 +134,12 @@ func TestFindDoesNotDeadlockWhenMatchesExceedIssueBuffer(t *testing.T) {
 
 type cancelGitHub struct{}
 
-func (cancelGitHub) SearchClosedIssues(_ context.Context, _ gh.SearchOptions) ([]gh.Issue, string, error) {
+func (cancelGitHub) SearchClosedIssues(_ context.Context, _ gh.SearchOptions) ([]gh.Issue, gh.SearchInfo, error) {
 	issues := make([]gh.Issue, 8)
 	for i := range issues {
 		issues[i] = gh.Issue{Repo: "acme/tool", Number: i + 1, Rank: i + 1}
 	}
-	return issues, "hybrid", nil
+	return issues, gh.SearchInfo{Type: "hybrid"}, nil
 }
 
 func (cancelGitHub) ClosingPullRequests(ctx context.Context, _ gh.Issue) ([]gh.PullRequest, error) {
@@ -164,15 +175,41 @@ func TestMatchedTermsKeepsTwoRuneNonASCIITerms(t *testing.T) {
 	}
 }
 
+type searchWarningGitHub struct{}
+
+func (searchWarningGitHub) SearchClosedIssues(_ context.Context, _ gh.SearchOptions) ([]gh.Issue, gh.SearchInfo, error) {
+	return nil, gh.SearchInfo{
+		Type:     "hybrid",
+		Warnings: []string{"GitHub issue search returned incomplete results"},
+	}, nil
+}
+
+func (searchWarningGitHub) ClosingPullRequests(_ context.Context, _ gh.Issue) ([]gh.PullRequest, error) {
+	return nil, nil
+}
+
+func TestFindStatusWarningOnSearchWarning(t *testing.T) {
+	result, err := New(searchWarningGitHub{}).Find(context.Background(), "deadlock", Options{Language: "go", Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusWarning {
+		t.Fatalf("status=%q", result.Status)
+	}
+	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "incomplete results") {
+		t.Fatalf("warnings=%#v", result.Warnings)
+	}
+}
+
 type lookupStatusGitHub struct {
 	failAll bool
 }
 
-func (lookupStatusGitHub) SearchClosedIssues(_ context.Context, _ gh.SearchOptions) ([]gh.Issue, string, error) {
+func (lookupStatusGitHub) SearchClosedIssues(_ context.Context, _ gh.SearchOptions) ([]gh.Issue, gh.SearchInfo, error) {
 	return []gh.Issue{
 		{Repo: "acme/tool", Number: 1, Title: "deadlock", Closed: true, Rank: 1},
 		{Repo: "acme/tool", Number: 2, Title: "deadlock", Closed: true, Rank: 2},
-	}, "hybrid", nil
+	}, gh.SearchInfo{Type: "hybrid"}, nil
 }
 
 func (f lookupStatusGitHub) ClosingPullRequests(_ context.Context, issue gh.Issue) ([]gh.PullRequest, error) {
@@ -213,8 +250,8 @@ func TestFindStatusFailureWhenAllLookupsFail(t *testing.T) {
 
 type searchFailureGitHub struct{}
 
-func (searchFailureGitHub) SearchClosedIssues(_ context.Context, _ gh.SearchOptions) ([]gh.Issue, string, error) {
-	return nil, "", errors.New("search failed")
+func (searchFailureGitHub) SearchClosedIssues(_ context.Context, _ gh.SearchOptions) ([]gh.Issue, gh.SearchInfo, error) {
+	return nil, gh.SearchInfo{}, errors.New("search failed")
 }
 
 func (searchFailureGitHub) ClosingPullRequests(_ context.Context, _ gh.Issue) ([]gh.PullRequest, error) {
