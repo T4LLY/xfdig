@@ -32,6 +32,8 @@ xfdig typescript -t "<query>"                  # human-readable output
 
 Each result contains a merged PR URL and machine-readable `evidence`. Prefer candidates with a low `issue_rank`, a directly linked merged PR, and matching technical terms.
 
+Check `status` before consuming `fixes`: `success` means discovery completed normally, `warning` means results are usable but incomplete, and `failure` means the search could not be completed reliably. Do not treat an empty `fixes` list from a `warning` or `failure` response as proof that no fix exists.
+
 Inspect only promising candidates with existing GitHub tooling:
 
 ```bash

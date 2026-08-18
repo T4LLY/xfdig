@@ -32,6 +32,12 @@ type Options struct {
 	Limit    int
 }
 
+const (
+	StatusSuccess = "success"
+	StatusWarning = "warning"
+	StatusFailure = "failure"
+)
+
 type Evidence struct {
 	IssueRank    int      `json:"issue_rank"`
 	IssueClosed  bool     `json:"issue_closed"`
@@ -57,13 +63,15 @@ type Fix struct {
 }
 
 type Result struct {
+	Status     string   `json:"status"`
 	Query      string   `json:"q"`
 	Language   string   `json:"language"`
 	Since      string   `json:"since,omitempty"`
 	Until      string   `json:"until,omitempty"`
-	SearchType string   `json:"search_type"`
+	SearchType string   `json:"search_type,omitempty"`
 	Fixes      []Fix    `json:"fixes"`
 	Warnings   []string `json:"warnings,omitempty"`
+	Error      string   `json:"error,omitempty"`
 }
 
 func (f *Finder) Find(ctx context.Context, query string, options Options) (Result, error) {
@@ -82,6 +90,15 @@ func (f *Finder) Find(ctx context.Context, query string, options Options) (Resul
 		return Result{}, err
 	}
 
+	result := Result{
+		Status:   StatusSuccess,
+		Query:    query,
+		Language: language,
+		Since:    options.Since,
+		Until:    options.Until,
+		Fixes:    make([]Fix, 0),
+	}
+
 	issueLimit := options.Limit * 4
 	if issueLimit < 12 {
 		issueLimit = 12
@@ -98,14 +115,18 @@ func (f *Finder) Find(ctx context.Context, query string, options Options) (Resul
 		Limit:    issueLimit,
 	})
 	if err != nil {
-		return Result{}, err
+		result.Status = StatusFailure
+		result.Error = err.Error()
+		return result, err
 	}
+	result.SearchType = mode
 
 	fixes := make([]Fix, 0, options.Limit)
 	warnings := make([]string, 0)
 	sem := make(chan struct{}, 4)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+	successfulLookups := 0
 
 	for _, issue := range issues {
 		issue := issue
@@ -126,6 +147,9 @@ func (f *Finder) Find(ctx context.Context, query string, options Options) (Resul
 				mu.Unlock()
 				return
 			}
+			mu.Lock()
+			successfulLookups++
+			mu.Unlock()
 
 			local := make([]Fix, 0, len(prs))
 			for _, pr := range prs {
@@ -162,8 +186,20 @@ func (f *Finder) Find(ctx context.Context, query string, options Options) (Resul
 	}
 
 	wg.Wait()
+	sort.Strings(warnings)
 	if err := ctx.Err(); err != nil {
-		return Result{}, fmt.Errorf("find fixes: %w", err)
+		err = fmt.Errorf("find fixes: %w", err)
+		result.Status = StatusFailure
+		result.Warnings = warnings
+		result.Error = err.Error()
+		return result, err
+	}
+	if len(issues) > 0 && successfulLookups == 0 {
+		err := fmt.Errorf("all closing PR lookups failed")
+		result.Status = StatusFailure
+		result.Warnings = warnings
+		result.Error = err.Error()
+		return result, err
 	}
 
 	sort.SliceStable(fixes, func(i, j int) bool {
@@ -180,17 +216,12 @@ func (f *Finder) Find(ctx context.Context, query string, options Options) (Resul
 	if len(fixes) > options.Limit {
 		fixes = fixes[:options.Limit]
 	}
-	sort.Strings(warnings)
-
-	return Result{
-		Query:      query,
-		Language:   language,
-		Since:      options.Since,
-		Until:      options.Until,
-		SearchType: mode,
-		Fixes:      fixes,
-		Warnings:   warnings,
-	}, nil
+	result.Fixes = fixes
+	result.Warnings = warnings
+	if len(warnings) > 0 {
+		result.Status = StatusWarning
+	}
+	return result, nil
 }
 
 func dedupe(fixes []Fix) []Fix {

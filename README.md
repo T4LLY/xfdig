@@ -73,6 +73,7 @@ Default output is compact JSON:
 
 ```json
 {
+  "status": "success",
   "q": "stderr pipe deadlock",
   "language": "go",
   "since": "2025-08-17",
@@ -102,6 +103,8 @@ Default output is compact JSON:
 ```
 
 `issue_rank` is the position returned by GitHub issue search; lower is better. `matched_terms` is a simple lexical overlap used only as additional evidence. It is not an LLM-generated explanation or a confidence score.
+
+`status` is `success` when discovery completed normally, `warning` when one or more linked-PR lookups failed but the remaining results are usable, and `failure` when discovery could not be completed reliably. Failure responses include an `error` field and exit with a non-zero status; detailed per-issue lookup failures remain in `warnings`.
 
 ## CLI chaining
 

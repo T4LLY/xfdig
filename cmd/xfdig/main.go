@@ -16,7 +16,7 @@ import (
 	"github.com/T4LLY/xfdig/internal/output"
 )
 
-const version = "0.2.2"
+const version = "0.3.0"
 
 var (
 	errHelp      = errors.New("help requested")
@@ -61,27 +61,28 @@ func run() int {
 	defer cancel()
 
 	client := gh.NewClient(gh.ExecRunner{})
-	result, err := finder.New(client).Find(ctx, cfg.Query, finder.Options{
+	result, findErr := finder.New(client).Find(ctx, cfg.Query, finder.Options{
 		Language: cfg.Language,
 		Since:    cfg.Since,
 		Until:    cfg.Until,
 		Limit:    cfg.Limit,
 	})
-	if err != nil {
+	if err := writeResult(cfg, result); err != nil {
 		fmt.Fprintln(os.Stderr, "xfdig:", err)
 		return 1
 	}
-
-	if cfg.Text {
-		err = output.Text(os.Stdout, result)
-	} else {
-		err = output.JSON(os.Stdout, result)
-	}
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "xfdig:", err)
+	if findErr != nil {
+		fmt.Fprintln(os.Stderr, "xfdig:", findErr)
 		return 1
 	}
 	return 0
+}
+
+func writeResult(cfg cliConfig, result finder.Result) error {
+	if cfg.Text {
+		return output.Text(os.Stdout, result)
+	}
+	return output.JSON(os.Stdout, result)
 }
 
 func printUsage(w *os.File) {

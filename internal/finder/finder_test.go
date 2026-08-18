@@ -44,6 +44,9 @@ func TestFindReturnsOnlyMergedLinkedPRs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if result.Status != StatusSuccess {
+		t.Fatalf("status=%q", result.Status)
+	}
 	if len(result.Fixes) != 1 {
 		t.Fatalf("fixes=%d", len(result.Fixes))
 	}
@@ -158,5 +161,72 @@ func TestMatchedTermsKeepsTwoRuneNonASCIITerms(t *testing.T) {
 	terms := matchedTerms("排他", "排他制御の不具合を修正")
 	if len(terms) != 1 || terms[0] != "排他" {
 		t.Fatalf("terms=%#v", terms)
+	}
+}
+
+type lookupStatusGitHub struct {
+	failAll bool
+}
+
+func (lookupStatusGitHub) SearchClosedIssues(_ context.Context, _ gh.SearchOptions) ([]gh.Issue, string, error) {
+	return []gh.Issue{
+		{Repo: "acme/tool", Number: 1, Title: "deadlock", Closed: true, Rank: 1},
+		{Repo: "acme/tool", Number: 2, Title: "deadlock", Closed: true, Rank: 2},
+	}, "hybrid", nil
+}
+
+func (f lookupStatusGitHub) ClosingPullRequests(_ context.Context, issue gh.Issue) ([]gh.PullRequest, error) {
+	if f.failAll || issue.Number == 2 {
+		return nil, errors.New("lookup failed")
+	}
+	return nil, nil
+}
+
+func TestFindStatusWarningOnPartialLookupFailure(t *testing.T) {
+	result, err := New(lookupStatusGitHub{}).Find(context.Background(), "deadlock", Options{Language: "go", Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusWarning {
+		t.Fatalf("status=%q", result.Status)
+	}
+	if len(result.Warnings) != 1 {
+		t.Fatalf("warnings=%#v", result.Warnings)
+	}
+}
+
+func TestFindStatusFailureWhenAllLookupsFail(t *testing.T) {
+	result, err := New(lookupStatusGitHub{failAll: true}).Find(context.Background(), "deadlock", Options{Language: "go", Limit: 5})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if result.Status != StatusFailure {
+		t.Fatalf("status=%q", result.Status)
+	}
+	if result.Error != "all closing PR lookups failed" {
+		t.Fatalf("error=%q", result.Error)
+	}
+	if len(result.Warnings) != 2 {
+		t.Fatalf("warnings=%#v", result.Warnings)
+	}
+}
+
+type searchFailureGitHub struct{}
+
+func (searchFailureGitHub) SearchClosedIssues(_ context.Context, _ gh.SearchOptions) ([]gh.Issue, string, error) {
+	return nil, "", errors.New("search failed")
+}
+
+func (searchFailureGitHub) ClosingPullRequests(_ context.Context, _ gh.Issue) ([]gh.PullRequest, error) {
+	return nil, nil
+}
+
+func TestFindStatusFailureOnSearchError(t *testing.T) {
+	result, err := New(searchFailureGitHub{}).Find(context.Background(), "deadlock", Options{Language: "go", Limit: 5})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if result.Status != StatusFailure || result.Error != "search failed" {
+		t.Fatalf("result=%#v", result)
 	}
 }
