@@ -38,6 +38,7 @@ xfdig go --since 1y "socket reconnect race"
 xfdig rust --since 2y --until 6m -n 8 "shutdown hangs"
 xfdig csharp -t "CustomRenderTexture does not update"
 xfdig any "HTTP proxy connection reset"
+xfdig go -- "-32603 internal error"
 ```
 
 ```text
@@ -48,6 +49,7 @@ Options:
   -u, --until <time>  search issues closed until this time
   -n <N>              maximum number of fixes (1-100, default 20)
   -t                  human-readable output
+  --                  stop option parsing (for queries beginning with -)
 ```
 
 `--since` and `--until` accept either an absolute date or a relative time:
@@ -67,7 +69,7 @@ xfdig go --since 2y --until 6m "deadlock"
 
 searches issues closed from 2024-08-17 through 2026-02-17. Omitting both bounds searches all available history.
 
-The language is a GitHub repository-language filter. Use `any` only when the problem is meaningfully language-independent.
+The language is a GitHub repository-language filter. Use `any` only when the problem is meaningfully language-independent. Queries beginning with `-` are accepted after the language; `--` can be used explicitly to stop option parsing.
 
 Default output is compact JSON:
 
@@ -104,7 +106,7 @@ Default output is compact JSON:
 
 `issue_rank` is the position returned by GitHub issue search; lower is better. `matched_terms` is a simple lexical overlap used only as additional evidence. It is not an LLM-generated explanation or a confidence score.
 
-`status` is `success` when discovery completed normally, `warning` when search fell back to lexical mode, GitHub reported incomplete search results, or one or more linked-PR lookups failed but the remaining results are usable, and `failure` when discovery could not be completed reliably. Failure responses include an `error` field and exit with a non-zero status; detailed per-issue lookup failures remain in `warnings`.
+`status` is `success` when discovery completed normally, `warning` when search fell back to lexical mode, GitHub reported incomplete search results, or one or more linked-PR lookups failed but the remaining results are usable, and `failure` when discovery could not be completed reliably. Failure responses include an `error` field and exit with a non-zero status; detailed per-issue lookup failures remain in `warnings`. Runtime prerequisites such as a missing `gh` executable also return the same structured failure shape.
 
 ## CLI chaining
 
@@ -132,7 +134,7 @@ The JSON also keeps `merged_at`, `repo`, `issue`, and `pr` so tools such as `jq`
 
 `xfdig` requests GitHub hybrid issue search through `gh api`. The search query always requires closed issues, applies the requested repository language unless it is `any`, and applies `closed:` date bounds when `--since` or `--until` is present.
 
-If the hybrid search request fails but ordinary issue search succeeds, `xfdig` falls back to lexical search, reports `"search_type":"lexical_fallback"`, and sets `status` to `warning`. GitHub search responses with `"incomplete_results":true` also produce `warning` so an empty result is not mistaken for a complete search.
+If the hybrid search request fails but ordinary issue search succeeds, `xfdig` falls back to lexical search, reports `"search_type":"lexical_fallback"`, and sets `status` to `warning`. When GitHub itself performs lexical search instead of the requested hybrid mode, `xfdig` preserves the reported `lexical_fallback_reason` values in the warning text. GitHub search responses with `"incomplete_results":true` also produce `warning` so an empty result is not mistaken for a complete search.
 
 For each closed issue candidate, `xfdig` asks GitHub GraphQL for `closedByPullRequestsReferences(includeClosedPrs: true)` and keeps only PRs with a merge timestamp. This avoids guessing issue/PR relationships from text.
 

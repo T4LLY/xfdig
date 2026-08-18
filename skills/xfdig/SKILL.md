@@ -24,9 +24,10 @@ xfdig go --since 1y "<query>"                  # fixes from the last year
 xfdig rust --since 2y --until 6m "<query>"     # bounded historical window
 xfdig csharp -n 50 "<query>"                   # more candidates
 xfdig typescript -t "<query>"                  # human-readable output
+xfdig go -- "-32603 internal error"             # query begins with -
 ```
 
-`--since` / `--until` accept `Nd`, `Nm`, `Ny`, or `YYYY-MM-DD`. Relative values are resolved from the current local date. No date options means all available history.
+`--since` / `--until` accept `Nd`, `Nm`, `Ny`, or `YYYY-MM-DD`. Relative values are resolved from the current local date. No date options means all available history. Use `--` to make the option boundary explicit when a query begins with `-`.
 
 ## Follow the evidence
 

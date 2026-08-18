@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -96,5 +99,61 @@ func TestParseCLIRejectsFlagWhereOptionValueIsRequired(t *testing.T) {
 	_, err := parseCLI([]string{"go", "-n", "-t", "deadlock"}, fixedNow())
 	if err == nil || err.Error() != "-n requires a value" {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestParseCLIAcceptsQueryBeginningWithHyphenAfterLanguage(t *testing.T) {
+	cfg, err := parseCLI([]string{"go", "-32603 internal error"}, fixedNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Query != "-32603 internal error" {
+		t.Fatalf("query=%q", cfg.Query)
+	}
+}
+
+func TestParseCLIAcceptsEndOfOptionsBeforeHyphenQuery(t *testing.T) {
+	cfg, err := parseCLI([]string{"go", "--", "--unexpected flag from upstream"}, fixedNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Query != "--unexpected flag from upstream" {
+		t.Fatalf("query=%q", cfg.Query)
+	}
+}
+
+func TestParseCLIRejectsUnknownOptionBeforeLanguage(t *testing.T) {
+	_, err := parseCLI([]string{"--bogus", "go", "deadlock"}, fixedNow())
+	if err == nil || !strings.Contains(err.Error(), "unknown option") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestRunArgsEmitsStructuredFailureWhenGHIsMissing(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runArgs(
+		[]string{"go", "deadlock"},
+		fixedNow(),
+		&stdout,
+		&stderr,
+		func(string) (string, error) { return "", errors.New("not found") },
+		nil,
+	)
+	if code != 1 {
+		t.Fatalf("code=%d", code)
+	}
+	for _, want := range []string{
+		`"status":"failure"`,
+		`"q":"deadlock"`,
+		`"language":"go"`,
+		`"fixes":[]`,
+		`"error":"GitHub CLI (gh) is required and was not found in PATH"`,
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %s: %s", want, stdout.String())
+		}
+	}
+	if !strings.Contains(stderr.String(), "GitHub CLI (gh) is required") {
+		t.Fatalf("stderr=%q", stderr.String())
 	}
 }

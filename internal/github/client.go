@@ -93,9 +93,10 @@ type PullRequest struct {
 }
 
 type searchResponse struct {
-	SearchType        string `json:"search_type"`
-	IncompleteResults bool   `json:"incomplete_results"`
-	Items             []struct {
+	SearchType            string   `json:"search_type"`
+	LexicalFallbackReason []string `json:"lexical_fallback_reason"`
+	IncompleteResults     bool     `json:"incomplete_results"`
+	Items                 []struct {
 		Number        int    `json:"number"`
 		Title         string `json:"title"`
 		HTMLURL       string `json:"html_url"`
@@ -172,7 +173,11 @@ func (c *Client) SearchClosedIssues(ctx context.Context, options SearchOptions) 
 	if response.SearchType != "" && info.Type != "lexical_fallback" {
 		info.Type = response.SearchType
 		if !strings.EqualFold(response.SearchType, "hybrid") {
-			info.Warnings = append(info.Warnings, fmt.Sprintf("GitHub performed %s issue search instead of requested hybrid search", response.SearchType))
+			warning := fmt.Sprintf("GitHub performed %s issue search instead of requested hybrid search", response.SearchType)
+			if len(response.LexicalFallbackReason) > 0 {
+				warning += "; reason: " + strings.Join(response.LexicalFallbackReason, ", ")
+			}
+			info.Warnings = append(info.Warnings, warning)
 		}
 	}
 	if response.IncompleteResults {
@@ -251,8 +256,11 @@ func (c *Client) ClosingPullRequests(ctx context.Context, issue Issue) ([]PullRe
 		if err := json.Unmarshal(out, &response); err != nil {
 			return nil, fmt.Errorf("decode closing PR response: %w", err)
 		}
-		if response.Data.Repository == nil || response.Data.Repository.Issue == nil {
-			return prs, nil
+		if response.Data.Repository == nil {
+			return nil, fmt.Errorf("closing PR lookup returned no repository for %q", issue.Repo)
+		}
+		if response.Data.Repository.Issue == nil {
+			return nil, fmt.Errorf("closing PR lookup returned no issue for %s#%d", issue.Repo, issue.Number)
 		}
 
 		connection := response.Data.Repository.Issue.ClosedByPullRequestsReferences

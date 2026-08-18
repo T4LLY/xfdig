@@ -107,7 +107,7 @@ func TestSearchClosedIssuesFallsBackToLexical(t *testing.T) {
 
 func TestSearchClosedIssuesWarnsWhenGitHubPerformsLexicalSearch(t *testing.T) {
 	runner := &fakeRunner{
-		responses: [][]byte{[]byte(`{"search_type":"lexical","items":[]}`)},
+		responses: [][]byte{[]byte(`{"search_type":"lexical","lexical_fallback_reason":["quoted_text"],"items":[]}`)},
 		errors:    []error{nil},
 	}
 	client := NewClient(runner)
@@ -119,7 +119,7 @@ func TestSearchClosedIssuesWarnsWhenGitHubPerformsLexicalSearch(t *testing.T) {
 	if info.Type != "lexical" {
 		t.Fatalf("mode=%q", info.Type)
 	}
-	if len(info.Warnings) != 1 || !strings.Contains(info.Warnings[0], "instead of requested hybrid") {
+	if len(info.Warnings) != 1 || !strings.Contains(info.Warnings[0], "instead of requested hybrid") || !strings.Contains(info.Warnings[0], "quoted_text") {
 		t.Fatalf("warnings=%#v", info.Warnings)
 	}
 }
@@ -220,6 +220,32 @@ func TestClosingPullRequestsRejectsInvalidPaginationCursor(t *testing.T) {
 
 	_, err := client.ClosingPullRequests(context.Background(), Issue{Repo: "acme/tool", Number: 7})
 	if err == nil || !strings.Contains(err.Error(), "invalid cursor") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestClosingPullRequestsRejectsNullRepository(t *testing.T) {
+	runner := &fakeRunner{
+		responses: [][]byte{[]byte(`{"data":{"repository":null}}`)},
+		errors:    []error{nil},
+	}
+	client := NewClient(runner)
+
+	_, err := client.ClosingPullRequests(context.Background(), Issue{Repo: "acme/tool", Number: 7})
+	if err == nil || !strings.Contains(err.Error(), "no repository") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestClosingPullRequestsRejectsNullIssue(t *testing.T) {
+	runner := &fakeRunner{
+		responses: [][]byte{[]byte(`{"data":{"repository":{"issue":null}}}`)},
+		errors:    []error{nil},
+	}
+	client := NewClient(runner)
+
+	_, err := client.ClosingPullRequests(context.Background(), Issue{Repo: "acme/tool", Number: 7})
+	if err == nil || !strings.Contains(err.Error(), "no issue") {
 		t.Fatalf("err=%v", err)
 	}
 }

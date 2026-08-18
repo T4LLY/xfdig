@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -16,7 +17,7 @@ import (
 	"github.com/T4LLY/xfdig/internal/output"
 )
 
-const version = "0.3.1"
+const version = "0.3.2"
 
 var (
 	errHelp      = errors.New("help requested")
@@ -38,54 +39,72 @@ func main() {
 }
 
 func run() int {
-	cfg, err := parseCLI(os.Args[1:], time.Now())
+	return runArgs(os.Args[1:], time.Now(), os.Stdout, os.Stderr, exec.LookPath, gh.ExecRunner{})
+}
+
+func runArgs(args []string, now time.Time, stdout, stderr io.Writer, lookPath func(string) (string, error), runner gh.Runner) int {
+	cfg, err := parseCLI(args, now)
 	if errors.Is(err, errHelp) {
-		printUsage(os.Stdout)
+		printUsage(stdout)
 		return 0
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "xfdig:", err)
-		printUsage(os.Stderr)
+		fmt.Fprintln(stderr, "xfdig:", err)
+		printUsage(stderr)
 		return 2
 	}
 	if cfg.ShowVersion {
-		fmt.Println("xfdig " + version)
+		fmt.Fprintln(stdout, "xfdig "+version)
 		return 0
 	}
-	if _, err := exec.LookPath("gh"); err != nil {
-		fmt.Fprintln(os.Stderr, "xfdig: GitHub CLI (gh) is required and was not found in PATH")
+	if _, err := lookPath("gh"); err != nil {
+		message := "GitHub CLI (gh) is required and was not found in PATH"
+		result := finder.Result{
+			Status:   finder.StatusFailure,
+			Query:    cfg.Query,
+			Language: cfg.Language,
+			Since:    cfg.Since,
+			Until:    cfg.Until,
+			Fixes:    make([]finder.Fix, 0),
+			Error:    message,
+		}
+		if writeErr := writeResult(stdout, cfg, result); writeErr != nil {
+			fmt.Fprintln(stderr, "xfdig:", writeErr)
+			return 1
+		}
+		fmt.Fprintln(stderr, "xfdig:", message)
 		return 1
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
-	client := gh.NewClient(gh.ExecRunner{})
+	client := gh.NewClient(runner)
 	result, findErr := finder.New(client).Find(ctx, cfg.Query, finder.Options{
 		Language: cfg.Language,
 		Since:    cfg.Since,
 		Until:    cfg.Until,
 		Limit:    cfg.Limit,
 	})
-	if err := writeResult(cfg, result); err != nil {
-		fmt.Fprintln(os.Stderr, "xfdig:", err)
+	if err := writeResult(stdout, cfg, result); err != nil {
+		fmt.Fprintln(stderr, "xfdig:", err)
 		return 1
 	}
 	if findErr != nil {
-		fmt.Fprintln(os.Stderr, "xfdig:", findErr)
+		fmt.Fprintln(stderr, "xfdig:", findErr)
 		return 1
 	}
 	return 0
 }
 
-func writeResult(cfg cliConfig, result finder.Result) error {
+func writeResult(w io.Writer, cfg cliConfig, result finder.Result) error {
 	if cfg.Text {
-		return output.Text(os.Stdout, result)
+		return output.Text(w, result)
 	}
-	return output.JSON(os.Stdout, result)
+	return output.JSON(w, result)
 }
 
-func printUsage(w *os.File) {
+func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage: xfdig <language|any> [options] <bug, error, or symptom>
 
 Find merged GitHub PRs linked to similar closed issues.
@@ -95,6 +114,7 @@ Options:
   -u, --until <time>  search issues closed until this time
   -n <N>              maximum number of fixes (1-100, default 20)
   -t                  human-readable output
+  --                  stop option parsing (for queries beginning with -)
       --version        print version
   -h, --help           show help
 
@@ -173,6 +193,10 @@ func parseCLI(args []string, now time.Time) (cliConfig, error) {
 				return cliConfig{}, err
 			}
 		case strings.HasPrefix(arg, "-"):
+			if len(positionals) > 0 {
+				positionals = append(positionals, arg)
+				continue
+			}
 			return cliConfig{}, fmt.Errorf("unknown option %q", arg)
 		default:
 			positionals = append(positionals, arg)
